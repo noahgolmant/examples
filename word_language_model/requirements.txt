@@ -1,1 +1,2 @@
 torch
+-e git+https://github.com/richardliaw/track.git@master#egg=track

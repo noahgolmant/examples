@@ -1,10 +1,12 @@
 # coding: utf-8
 import argparse
 import time
+import os
 import math
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import track
 
 import data
 import model
@@ -42,6 +44,8 @@ parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
 parser.add_argument('--save', type=str,  default='model.pt',
                     help='path to save the final model')
+parser.add_argument('--logroot', type=str, default='./logs',
+                    help='logging dir for track')
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
@@ -174,33 +178,45 @@ def train():
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
             total_loss = 0
             start_time = time.time()
+    return cur_loss
 
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
 
 # At any point you can hit Ctrl + C to break out of training early.
-try:
-    for epoch in range(1, args.epochs+1):
-        epoch_start_time = time.time()
-        train()
-        val_loss = evaluate(val_data)
+param_map = {
+    'batch_size': args.batch_size
+}
+
+with track.trial(args.logroot, None, param_map=param_map):
+    try:
+        for epoch in range(1, args.epochs+1):
+            epoch_start_time = time.time()
+            train_loss = train()
+            val_loss = evaluate(val_data)
+            print('-' * 89)
+            track.debug('| end of epoch {:3d} | time: {:5.2f}s | train loss {:5.2f} | valid loss {:5.2f} | '
+                    'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                               train_loss, val_loss, math.exp(val_loss)))
+            print('-' * 89)
+            track.metric(iteration=epoch, train_loss=train_loss,
+                         test_loss=val_loss)
+            # Log model
+            model_fname = os.path.join(track.trial_dir(), "model{}.ckpt".format(epoch))
+            torch.save(model, model_fname)
+            # Save the model if the validation loss is the best we've seen so far.
+            if not best_val_loss or val_loss < best_val_loss:
+                best_fname = os.path.join(track.trial_dir(), "best.ckpt")
+                with open(best_fname, 'wb') as f:
+                    torch.save(model, f)
+                best_val_loss = val_loss
+            else:
+                # Anneal the learning rate if no improvement has been seen in the validation dataset.
+                lr /= 4.0
+    except KeyboardInterrupt:
         print('-' * 89)
-        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
-                                           val_loss, math.exp(val_loss)))
-        print('-' * 89)
-        # Save the model if the validation loss is the best we've seen so far.
-        if not best_val_loss or val_loss < best_val_loss:
-            with open(args.save, 'wb') as f:
-                torch.save(model, f)
-            best_val_loss = val_loss
-        else:
-            # Anneal the learning rate if no improvement has been seen in the validation dataset.
-            lr /= 4.0
-except KeyboardInterrupt:
-    print('-' * 89)
-    print('Exiting from training early')
+        print('Exiting from training early')
 
 # Load the best saved model.
 with open(args.save, 'rb') as f:
