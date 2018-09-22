@@ -176,7 +176,7 @@ def train():
             for p in model.parameters():
                 p.data.add_(-lr, p.grad.data)
 
-        total_loss += loss.item()
+        total_loss += loss.item() * nb
 
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss / args.log_interval
@@ -228,8 +228,8 @@ with track.trial(args.logroot, None, param_map=param_map):
         print('Exiting from training early')
 
 # Load the best saved model.
-with open(args.save, 'rb') as f:
-    model = torch.load(f)
+# with open(args.save, 'rb') as f:
+    # model = torch.load(f)
 
 # Run on test data.
 test_loss = evaluate(test_data)
