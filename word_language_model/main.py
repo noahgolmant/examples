@@ -154,7 +154,7 @@ def train():
     total_loss = 0
     start_time = time.time()
     ntokens = len(corpus.dictionary)
-    hidden = model.init_hidden(args.batch_size)
+    hidden = model.init_hidden(min(args.batch_size, args.max_samples))
     if args.batch_size > args.max_samples:
         nb = args.batch_size // args.max_samples
     else:
