@@ -22,11 +22,11 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
-                        ' (default: resnet18)')
+                        ' (default: resnet50)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
@@ -55,6 +55,8 @@ parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
+parser.add_argument('--logroot', default='./logs', type=str)
+parser.add_argument('--max_samples', default=64, type=int)
 
 best_prec1 = 0
 
@@ -131,7 +133,8 @@ def main():
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        train_dataset, batch_size=min(args.batch_size, args.max_samples),
+        shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
@@ -141,34 +144,39 @@ def main():
             transforms.ToTensor(),
             normalize,
         ])),
-        batch_size=args.batch_size, shuffle=False,
+        batch_size=args.max_samples, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
         validate(val_loader, model, criterion)
         return
 
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch)
+    with track.trial(args.logroot, None, param_map={'batch_size': args.batch_size}):
+        for epoch in range(args.start_epoch, args.epochs):
+            if args.distributed:
+                train_sampler.set_epoch(epoch)
+            adjust_learning_rate(optimizer, epoch)
 
-        # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+            # train for one epoch
+            train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
-        # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+            # evaluate on validation set
+            val_loss, prec1 = validate(val_loader, model, criterion)
 
-        # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-            'optimizer' : optimizer.state_dict(),
-        }, is_best)
+            track.metric(iteration=epoch, train_loss=train_loss,
+                         test_loss=val_loss, prec=prec1)
+            # Log model
+            model_fname = os.path.join(track.trial_dir(), "model{}.ckpt".format(epoch))
+            torch.save(model, model_fname)
+
+            # Save the model if the validation loss is the best we've seen so far.
+            # remember best prec@1 and save checkpoint
+            is_best = prec1 > best_prec1
+            best_prec1 = max(prec1, best_prec1)
+            if is_best:
+                best_fname = os.path.join(track.trial_dir(), "best.ckpt")
+                with open(best_fname, 'wb') as f:
+                    torch.save(model, f)
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -182,9 +190,16 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
+    if args.batch_size > args.max_samples:
+        nb = args.batch_size // args.max_samples
+    else:
+        nb = 1
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
+
+        if i % nb == 0:
+            optimizer.zero_grad()
 
         target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input)
@@ -192,18 +207,18 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         # compute output
         output = model(input_var)
-        loss = criterion(output, target_var)
+        loss = criterion(output, target_var) / nb
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+        losses.update(loss.item() * nb, input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top5.update(prec5.item(), input.size(0))
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        if i % nb == 0:
+            optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
