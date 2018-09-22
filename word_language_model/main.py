@@ -5,6 +5,7 @@ import os
 import math
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.autograd import Variable
 import track
 
@@ -16,9 +17,9 @@ parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU)')
-parser.add_argument('--emsize', type=int, default=200,
+parser.add_argument('--emsize', type=int, default=650,
                     help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=200,
+parser.add_argument('--nhid', type=int, default=650,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=2,
                     help='number of layers')
@@ -32,7 +33,7 @@ parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
 parser.add_argument('--bptt', type=int, default=35,
                     help='sequence length')
-parser.add_argument('--dropout', type=float, default=0.2,
+parser.add_argument('--dropout', type=float, default=0.5,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--tied', action='store_true',
                     help='tie the word embedding and softmax weights')
@@ -46,6 +47,7 @@ parser.add_argument('--save', type=str,  default='model.pt',
                     help='path to save the final model')
 parser.add_argument('--logroot', type=str, default='./logs',
                     help='logging dir for track')
+parser.add_argument('--max_samples', type=int, default=32)
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
@@ -86,7 +88,7 @@ def batchify(data, bsz):
     return data
 
 eval_batch_size = 10
-train_data = batchify(corpus.train, args.batch_size)
+train_data = batchify(corpus.train, min(args.batch_size, args.max_samples))
 val_data = batchify(corpus.valid, eval_batch_size)
 test_data = batchify(corpus.test, eval_batch_size)
 
@@ -107,8 +109,9 @@ criterion = nn.CrossEntropyLoss()
 
 def repackage_hidden(h):
     """Wraps hidden states in new Variables, to detach them from their history."""
-    if type(h) == Variable:
-        return Variable(h.data)
+    if type(h) == Tensor:
+        return h.detach()
+        # return Variable(h.data)
     else:
         return tuple(repackage_hidden(v) for v in h)
 
@@ -140,9 +143,9 @@ def evaluate(data_source):
         data, targets = get_batch(data_source, i, evaluation=True)
         output, hidden = model(data, hidden)
         output_flat = output.view(-1, ntokens)
-        total_loss += len(data) * criterion(output_flat, targets).data
+        total_loss += len(data) * criterion(output_flat, targets).item()
         hidden = repackage_hidden(hidden)
-    return total_loss[0] / len(data_source)
+    return total_loss / len(data_source)
 
 
 def train():
@@ -152,25 +155,31 @@ def train():
     start_time = time.time()
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(args.batch_size)
+    if args.batch_size > args.max_samples:
+        nb = args.batch_size // args.max_samples
+    else:
+        nb = 1
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         data, targets = get_batch(train_data, i)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         hidden = repackage_hidden(hidden)
-        model.zero_grad()
+        if i % nb == 0:
+            model.zero_grad()
         output, hidden = model(data, hidden)
-        loss = criterion(output.view(-1, ntokens), targets)
+        loss = criterion(output.view(-1, ntokens), targets) / nb
         loss.backward()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
-        for p in model.parameters():
-            p.data.add_(-lr, p.grad.data)
+        if i % nb == 0:
+            torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
+            for p in model.parameters():
+                p.data.add_(-lr, p.grad.data)
 
-        total_loss += loss.data
+        total_loss += loss.item()
 
         if batch % args.log_interval == 0 and batch > 0:
-            cur_loss = total_loss[0] / args.log_interval
+            cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f}'.format(
