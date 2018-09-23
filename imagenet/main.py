@@ -168,7 +168,8 @@ def main():
             train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
             # evaluate on validation set
-            val_loss, prec1 = validate(val_loader, model, criterion)
+            with torch.no_grad():
+                val_loss, prec1 = validate(val_loader, model, criterion)
 
             track.metric(iteration=epoch, train_loss=train_loss,
                          test_loss=val_loss, prec=prec1)
@@ -264,9 +265,9 @@ def validate(val_loader, model, criterion):
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top5.update(prec5.item(), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
