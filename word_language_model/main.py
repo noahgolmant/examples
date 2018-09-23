@@ -47,7 +47,7 @@ parser.add_argument('--save', type=str,  default='model.pt',
                     help='path to save the final model')
 parser.add_argument('--logroot', type=str, default='./logs',
                     help='logging dir for track')
-parser.add_argument('--max_samples', type=int, default=32)
+parser.add_argument('--max_samples', type=int, default=64)
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
@@ -154,21 +154,24 @@ def train():
     total_loss = 0
     start_time = time.time()
     ntokens = len(corpus.dictionary)
-    hidden = model.init_hidden(min(args.batch_size, args.max_samples))
     if args.batch_size > args.max_samples:
         nb = args.batch_size // args.max_samples
     else:
         nb = 1
+    hiddens = [model.init_hidden(min(args.batch_size, args.max_samples))
+               for _ in range(nb)]
+
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         data, targets = get_batch(train_data, i)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
+        hidden = hiddens[i % nb]
         hidden = repackage_hidden(hidden)
         if i % nb == 0:
             model.zero_grad()
         output, hidden = model(data, hidden)
-        loss = criterion(output.view(-1, ntokens), targets) / nb
-        loss.backward()
+        loss = criterion(output.view(-1, ntokens), targets)
+        loss.backward(torch.ones(()).cuda() / nb)
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if i % nb == 0:
@@ -176,7 +179,8 @@ def train():
             for p in model.parameters():
                 p.data.add_(-lr, p.grad.data)
 
-        total_loss += loss.item() * nb
+        total_loss += loss.item()
+        hiddens[i % nb] = hidden
 
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss / args.log_interval
