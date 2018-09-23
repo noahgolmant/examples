@@ -98,6 +98,8 @@ def main():
 
     if args.sqrt_lr:
         lr = args.lr * math.sqrt(args.batch_size / 32.)
+    else:
+        lr = args.lr
 
     optimizer = torch.optim.SGD(model.parameters(), lr,
                                 momentum=args.momentum,
