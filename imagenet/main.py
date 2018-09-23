@@ -97,7 +97,7 @@ def main():
     criterion = nn.CrossEntropyLoss().cuda()
 
     if args.sqrt_lr:
-        lr = args.lr * math.sqrt(args.batch_size / 64.)
+        lr = args.lr * math.sqrt(args.batch_size / 32.)
 
     optimizer = torch.optim.SGD(model.parameters(), lr,
                                 momentum=args.momentum,
@@ -314,7 +314,7 @@ class AverageMeter(object):
 def adjust_learning_rate(optimizer, epoch, warmup=5):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     if args.linear_lr:
-        final_lr = args.lr * args.batch_size / 64.
+        final_lr = args.lr * args.batch_size / 32.
         if epoch < warmup:
             lr = epoch * (final_lr - args.lr) / warmup + args.lr
         else:
