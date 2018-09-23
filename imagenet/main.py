@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import shutil
 import time
@@ -38,9 +39,11 @@ parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+parser.add_argument('--sqrt_lr', action='store_true')
+parser.add_argument('--linear_lr', action='store_true')
+parser.add_argument('--momentum', default=0.0, type=float, metavar='M',
                     help='momentum')
-parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+parser.add_argument('--weight-decay', '--wd', default=0, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--print-freq', '-p', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
@@ -57,7 +60,7 @@ parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
 parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
 parser.add_argument('--logroot', default='./logs', type=str)
-parser.add_argument('--max_samples', default=64, type=int)
+parser.add_argument('--max_samples', default=128, type=int)
 
 best_prec1 = 0
 
@@ -93,7 +96,10 @@ def main():
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    if args.sqrt_lr:
+        lr = args.lr * math.sqrt(args.bs / 64.)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
@@ -305,9 +311,16 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizer, epoch, warmup=5):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
+    if args.linear_lr:
+        final_lr = args.lr * args.bs / 64.
+        if epoch < warmup:
+            lr = epoch * (final_lr - args.lr) / warmup + args.lr
+        else:
+            lr = final_lr
+
+    lr = lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
