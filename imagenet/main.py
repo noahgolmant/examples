@@ -319,6 +319,8 @@ def adjust_learning_rate(optimizer, epoch, warmup=5):
             lr = epoch * (final_lr - args.lr) / warmup + args.lr
         else:
             lr = final_lr
+    else:
+        lr = args.lr
 
     lr = lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
